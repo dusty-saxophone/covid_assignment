@@ -6,6 +6,8 @@ date: "2025-03-02"
 
 # Measuring Growth Rate and Reproduction Number for SARS-CoV-2 variants
 
+Link to anonymous GitHub repository: <https://github.com/dusty-saxophone/covid_assignment/tree/main>
+
 ## Introduction
 
 This assignment is on the measurement of growth rate and the estimation of the reproduction number (R) of different COVID-19 major lineages, with a particular focus on the B.1.617.2 (Delta) strain. Strain frequencies can be estimated using genomic sequence data which can differentiate strains. Sequence data from the COVID-19 Genomics UK Consortium (COG-UK) genomic sequence database collected by the Wellcome Sanger Institute. Genomic data was gathered from the residues of PCR tests given to **symptomatic individuals** during the pandemic. This differs from the ONS-CIS data used during the practical which was collected from a random sample of UK residential households, meaning that both symptomatic and asymptomic infections were sampled.
