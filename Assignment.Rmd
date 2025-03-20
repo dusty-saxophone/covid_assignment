@@ -1,0 +1,828 @@
+---
+title: "SARS-CoV-2"
+output: html_document
+date: "2025-03-02"
+---
+
+# Measuring Growth Rate and Reproduction Number for SARS-CoV-2 variants
+
+## Introduction
+
+This assignment is on the measurement of growth rate and the estimation of the reproduction number (R) of different COVID-19 major lineages, with a particular focus on the B.1.617.2 (Delta) strain. Strain frequencies can be estimated using genomic sequence data which can differentiate strains. Sequence data from the COVID-19 Genomics UK Consortium (COG-UK) genomic sequence database collected by the Wellcome Sanger Institute. Genomic data was gathered from the residues of PCR tests given to **symptomatic individuals** during the pandemic. This differs from the ONS-CIS data used during the practical which was collected from a random sample of UK residential households, meaning that both symptomatic and asymptomic infections were sampled.
+
+A logistic growth model is then used to estimated the selective advantage (s) of a particular strain over all other circulating strains at a particular point in time. The selective advantage of Delta is then compared among different geographic UK regions, to identify the region with the fastest Delta outbreak. Next, the true incidence of Delta in England can be estimated by multiplying the daily total case count with the weekly frequencies of Delta calculated from using the COG-UK data. Using the estimated daily case counts of Delta, the time-varying reproduction number (Rt) can be measured.
+
+## Question 1 - visualising the lineages
+
+```{r, message=FALSE}
+library(here)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+```
+
+Generate a dataframe of weekly counts of viral lineages sampled in England and identified through genome sequencing. The date the sample was collected is recorded, along with the number of samples of lineages collected on that date. The data is manipulated so that Alpha (B.1.1.7), Delta (B.1.617.2), and various Omicron sublineages, including BA.1, BA.2, BA.4, BA.5, and XBB, are classified as **major lineages** and other lineages are classified as "Other".
+
+```{r}
+
+# Load the COG-UK Sanger dataset from the csv file
+weekly_counts <- read.csv("Genomes_per_week_in_England.csv")
+
+# Generate a dataframe of weekly counts of major viral lineages
+weekly_counts_major_lineages <- weekly_counts %>%
+  
+  # Add a coumn which categorises specific lineages as major lineages and the rest as "Other"
+  mutate(major_lineage = case_when(
+    lineage == "B.1.1.7" ~ "B.1.1.7 (Alpha)",
+    lineage == "B.1.617.2" ~ "B.1.617.2 (Delta)",
+    lineage == "BA.1" ~ "BA.1",
+    lineage == "BA.2" ~ "BA.2",
+    lineage == "BA.2.75" ~ "BA.2.75",
+    lineage == "BA.4" ~ "BA.4",
+    lineage == "BA.5" ~ "BA.5",
+    lineage == "BA.5.3" ~ "BA.5.3 (BQ.1)",
+    lineage == "XBB" ~ "XBB",
+    TRUE ~ "Other",
+  )) %>%
+  
+  # Group the data by date and major lineage
+  group_by(date, major_lineage) %>%
+  
+  # Calculate the total number of counts for each combination of date and major lineage (what the data was grouped by previously)
+  summarise(counts = sum(count, na.rm = TRUE), .groups = "drop") %>%
+  
+  # Arrange by date and major lineage so data frame is easy to interpret
+  arrange(date, major_lineage) %>%
+  
+  # Convert to date format
+  mutate(date = as.Date(date))
+
+head(weekly_counts_major_lineages)
+```
+
+**Stacked area plot showing the total counts of each major lineage over time:**
+
+```{r}
+
+# Assign colours to each major lineage
+# Use the same colour pallette as the practical for consistency
+colour_palette <- c(
+  "B.1.1.7 (Alpha)" = "#1f77b4", # Blue
+  "B.1.617.2 (Delta)" = "#ff7f0e", # Orange
+  "BA.1" = "#2ca02c",  # Green
+  "BA.2" = "#d62728",  # Red
+  "BA.2.75" = "#008B8B",  # Teal
+  "BA.4" = "#9467bd",  # Purple
+  "BA.5" = "#8c564b",  # Brown
+  "BA.5.3 (BQ.1)" = "#e377c2",  # Pink
+  "XBB" = "#D2B48C",  # Light brown
+  "Other" = "#7f7f7f"  # Gray
+)
+
+# Generate a stacked area plot of lineage counts over time
+ggplot(weekly_counts_major_lineages, aes(x = date, y = counts, fill = major_lineage)) +
+  geom_area() +
+  scale_fill_manual(values = colour_palette) +
+  labs(
+    title = "Stacked area plot showing the total counts of each lineage over time",
+    x = "Collection date",
+    y = "Case count",
+    fill = "Major lineage"
+  ) +
+  theme_minimal()
+```
+
+**Stacked area plot showing the frequencies (proportions) of each major lineage over time:**
+
+```{r}
+# Generate a stacked area plot of lineage frequencies over time
+ggplot(weekly_counts_major_lineages, aes(x = date, y = counts, fill = major_lineage)) +
+  # Converts counts to proportions
+  geom_area(position = "fill") +
+  scale_fill_manual(values = colour_palette) +
+  labs(
+    title = "Stacked area plot showing the proportions of each lineage over time",
+    x = "Collection date",
+    y = "Lineage frequency (proportion)",
+    fill = "Major lineage"
+  ) +
+  theme_minimal()
+```
+
+## Question 2 - BA.2
+
+#### Generating frequency data for each lineage per week using the COG-UK Sanger dataset
+
+Requires the calculation of lineage counts for each major lineage per week and the calculation of total lineage counts per week. Lineage frequency (proportion) for each week is therefore the lineage count divided by the total count.
+
+```{r}
+# Group by date and major linage, calculate the total case counts for each date, arrange by date and major lineage
+lineage_summary_weekly_data <- weekly_counts_major_lineages %>%
+  
+  # Group the data by date and major lineage
+  group_by(date, major_lineage) %>%
+  
+  # Calculate the total number of counts for each combination of date and major lineage
+  summarise(counts = sum(counts), .groups = "drop") %>%
+  
+  arrange(date, major_lineage)
+
+# Calculate total counts per date and calculate lineage proportions
+lineage_summary_weekly_data <- lineage_summary_weekly_data %>%
+  
+  # Group by date
+  group_by(date) %>%
+  
+  # Calculate total case count per date (grouped by date above)
+  # Calculate the proportion of each lineage per date
+  # Add to new columns "total counts" and "lineage proportion"
+  mutate(total_counts = sum(counts),
+         lineage_proportion = counts / total_counts) %>%
+  
+  # Remove grouping
+  ungroup()
+
+# Rename columns
+colnames(lineage_summary_weekly_data) <- c("collection_date", "major_lineage", "lineage_count", "total_count", "lineage_proportion")
+
+head(lineage_summary_weekly_data)
+```
+
+Visualise the lineage proportion of BA.2 using COG-UK Sanger data
+
+```{r}
+# Subset the lineage data for BA.2
+daily_trajectories <- subset(
+  lineage_summary_weekly_data,
+  major_lineage %in% "BA.2"
+)
+
+# Plot the weekly proportions of BA.2 over time
+ggplot(daily_trajectories, aes(x = collection_date, y = lineage_proportion)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  theme_minimal()
+```
+
+#### Generating frequency data for each lineage per 10-day interval using the ONS-CIS dataset
+
+First, the ONS-CIS daily genomic sequence is imported from GitHub. The format of the data can be viewed below.
+
+```{r}
+# Import ONS-CIS daily genomic sequence data
+url <- "https://raw.githubusercontent.com/mg878/variant_fitness_practical/main/lineage_data.csv"
+ONS_data <- read.csv(url)
+
+# Ensure collection_date is in Date format
+ONS_data$collection_date <- as.Date(ONS_data$collection_date)
+
+# View first few rows of the data
+head(ONS_data)
+```
+
+Next, the data is manipulated so that the sequences are grouped by date and major lineage. The number of sequences of each lineage is counted per date (lineage count) along with the total counts of sequences of all lineages per date (total count).
+
+```{r}
+# Aggregate the data by collection date and major lineage
+# Count the numbers of each lineage per date using length function
+ONS_summary <- aggregate(
+  ONS_data$major_lineage,
+  by = list(collection_date = ONS_data$collection_date, major_lineage = ONS_data$major_lineage),
+  FUN = length
+)
+
+# Rename columns for clarity
+colnames(ONS_summary) <- c("collection_date", "major_lineage", "lineage_count")
+
+# Group by date and major linage, calculate the total case counts for each date, arrange by date and then by major lineage
+ONS_summary <- ONS_summary %>%
+  
+  # Group the data by date and major lineage
+  group_by(collection_date, major_lineage) %>%
+  
+  # Calculate the total number of counts for each combination of date and major lineage
+  summarise(lineage_count = sum(lineage_count), .groups = "drop") %>%
+  
+  arrange(collection_date, major_lineage)
+
+# Calculate total counts per date
+ONS_summary <- ONS_summary %>%
+  
+  # Group by date
+  group_by(collection_date) %>%
+  
+  # Calculate total case count per date (grouped by date above)
+  # Calculate the proportion of each lineage per date
+  # Add to new columns "total counts" and "lineage proportion"
+  mutate(total_count = sum(lineage_count),
+         lineage_proportion = lineage_count / total_count) %>%
+  ungroup()
+
+colnames(ONS_summary) <- c("collection_date", "major_lineage", "lineage_count", "total_count", "lineage_proportion")
+
+# View first few rows
+head(ONS_summary)
+```
+
+The ONS data is based on sequences collected daily. Now the lineage frequencies must be aggregated into 10-day bins.
+
+```{r}
+# Sort lineage frequencies into 10-day bins
+# Converts the Date values into numeric format, where each date is represented as the number of days since 1970-01-01 (the Unix epoch)
+ONS_summary$collection_date_bin <- as.Date(
+  floor(as.numeric(as.Date(ONS_summary$collection_date)) / 10) * 10, origin = "1970-01-01"
+)
+
+# Aggregate data by collection_date_bin and major lineage to get the sum of lineage counts within each 10-day bin
+ONS_summary_binned <- aggregate(
+  lineage_count ~ collection_date_bin + major_lineage,
+  data = ONS_summary,
+  FUN = sum
+)
+
+# Calculate total counts of all lineages for each 10-day bin
+total_counts <- aggregate(
+  lineage_count ~ collection_date_bin,
+  data = ONS_summary_binned,
+  FUN = sum
+)
+colnames(total_counts) <- c("collection_date_bin", "total_count")  # Rename for clarity
+
+# Merge total counts back into the binned dataframe (as collection_date_bin is same in each)
+ONS_summary_binned <- merge(ONS_summary_binned, total_counts, by = "collection_date_bin")
+
+# Calculate the frequency of each lineage within each 10-day bin
+ONS_summary_binned$lineage_frequency <- ONS_summary_binned$lineage_count / ONS_summary_binned$total_count
+
+# View the first few rows
+head(ONS_summary_binned)
+```
+
+Visualise the lineage proportion of BA.2 using ONS-CIS binned data
+
+```{r}
+# Subset the lineage data for BA.2
+daily_trajectories_binned <- subset(
+  ONS_summary_binned,
+  major_lineage %in% "BA.2"
+)
+
+# Plot the 10-day binned proportions of BA.2 over time
+ggplot(daily_trajectories_binned, aes(x = collection_date_bin, y = lineage_frequency)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  theme_minimal()
+```
+
+#### Comparing the frequency trajectories of BA.2 from the COG-UK and ONS-CIS datasets
+
+The two datasets can now be combined into a single dataframe to facilitate direct comparison of the COG-UK Sanger and ONS data.
+
+```{r}
+# Column names must be the same to merge datasets
+colnames(ONS_summary_binned) <- c("collection_date", "major_lineage", "lineage_count", "total_count", "lineage_proportion")
+
+# Add a source column to distinguish datasets
+lineage_summary_weekly_data$dataset <- "Sanger (Weekly)"
+ONS_summary_binned$dataset <- "ONS-CIS (10-day)"
+
+# Combine datasets together
+combined_data <- bind_rows(lineage_summary_weekly_data, ONS_summary_binned)
+
+# Filter for BA.2 variant
+combined_trajectories <- subset(combined_data, major_lineage == "BA.2") %>%
+  
+  # Also filter for the peak of the Delta outbreak
+  filter(collection_date >= as.Date("2021-12-01") & collection_date <= as.Date("2022-09-01"))
+```
+
+This can now be visualized in a single graph.
+
+```{r}
+# Plot graph to compare the lineage proportion of Delta for ONS and Sanger datasets
+ggplot(combined_trajectories, aes(x = collection_date, y = lineage_proportion, color = dataset, linetype = dataset)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Frequency Trajectory of BA.2 Variant",
+       x = "Collection Date",
+       y = "Lineage Proportion",
+       color = "Dataset",
+       linetype = "Dataset") +
+  theme(legend.position = "top")
+```
+
+The two trajectories are very similar for the ONS-CIS and COG-UK Sanger datasets and both seem to peak around late April/early May. The peak seems to occur slightly earlier for the ONS-CIS data and may be due to differences in sampling strategies. The ONS-CIS study relies on sampling random households and includes samples from both asymptomatic and symptomatic individuals. This may account for the earlier rise in Delta if a large proportion of Delta cases are asymptomatic, as it could spread to more individuals without generating as many symptomatic cases which could account for a sampling lag in symptomatic individuals. Furthermore, symptomatic individuals are more likely to enter into self-isolation which could reduce transmission and explain the slower fixation.
+
+## Question 3 - comparing selective advantage of B.1.617.2, BA.1, and BA.2
+
+#### Defining functions
+
+Define logistic growth function:
+
+```{r}
+#' Function to model logistic growth
+#' 
+#' @param time time point for calculating the growth
+#' @param s growth rate 
+#' @param f0 initial non-zero frequency of the variant
+#' 
+#' @return returns the predicted frequency based on the parameters
+
+logistic_growth <- function(time, s, f0) {
+  1 / (1 + ((1 - f0) / f0) * exp(-s * time))
+}
+```
+
+Define function to fit logistic growth and visualize results:
+
+```{r}
+#' Function to fit logistic growth model to lineage frequency data and then generate a graph which plots the frequency data and a fitted logistic growth model
+#' 
+#' @param data lineage frequency data
+#' @param start_date starting collection date for the model to be applied to in "Date" format
+#' @param end_date ending collection date for the model to be applied to in "Date" format
+#' @param variant_name name of variant in string format to be applied to graphs
+#' 
+#' @return returns fitted model and growth rate which is shown on a line graph
+
+fit_logistic_growth <- function(data, start_date, end_date, variant_name) {
+  
+  # Subset data to focus on specified date range
+  growth_phase <- data %>%
+    filter(collection_date >= as.Date(start_date) & collection_date <= as.Date(end_date))
+  
+  # Fit the logistic growth model using non-linear least squares (nls)
+  # This fits the model by minimising sum of squared residuals
+  # Requires an initial guess of s and f0
+  # s - 0.1
+  # f0 - minimum lineage proportion within range of dates
+  nls_fit <- nls(
+    lineage_proportion ~ logistic_growth(as.numeric(collection_date - min(collection_date)), s, f0),
+    data = growth_phase,
+    start = list(s = 0.1, f0 = min(growth_phase$lineage_proportion))
+  )
+  
+  # Extract the growth rate value from the fitted model
+  growth_rate <- coef(nls_fit)["s"]
+  
+  # Generate smooth sequence of dates for plotting
+  # Sequence is between collection date values, increasing by 1 day
+  smooth_dates <- seq(min(growth_phase$collection_date),
+                      max(growth_phase$collection_date), by = "1 day")
+  
+  # Calculate predicted lineage frequencies for each date
+  # Using the previously defined logistic growth function for each smooth date
+  smooth_predictions <- data.frame(
+    collection_date = smooth_dates,
+    predicted_frequency = logistic_growth(as.numeric(smooth_dates - min(growth_phase$collection_date)),
+                                          coef(nls_fit)["s"], coef(nls_fit)["f0"])
+  )
+  
+  # Plot the actual data and the fitted logistic growth curve
+  plot <- ggplot(growth_phase, aes(x = collection_date)) +
+    
+    # Points are the actual lineage proportions
+    geom_point(aes(y = lineage_proportion), color = "black", linewidth = 2, alpha = 0.7) +
+    
+    # Line is the fitted logistic growth model
+    geom_line(data = smooth_predictions, aes(x = collection_date, y = predicted_frequency), 
+              color = "orange", size = 1) +
+    
+    # Annotate graph with selective advantage
+    annotate(
+      "text", 
+      x = min(growth_phase$collection_date) + (max(growth_phase$collection_date) - min(growth_phase$collection_date)) / 2, 
+      y = 0.4, 
+      label = paste0("s = ", round(growth_rate, 4)), 
+      color = "orange", 
+      size = 5
+    ) +
+    
+    # Add title and axis lables
+    labs(
+      title = paste("Logistic Growth Fit for", variant_name, "Variant Frequency"),
+      x = "Collection Date",
+      y = "Frequency"
+    ) +
+    theme_minimal()
+  
+  # Print the plot
+  print(plot)
+  
+  # Return the fitted model and growth rate
+  return(list(model = nls_fit, growth_rate = growth_rate))
+}
+```
+
+#### Applying functions to B.1.617.2 (Delta)
+
+The time interval in which the variant is increasing in frequency until it reaches fixation must be identified.
+
+```{r}
+# subset the lineage data for delta
+delta_data <- subset(lineage_summary_weekly_data, major_lineage == "B.1.617.2 (Delta)")
+
+# Plot daily delta frequencies over time to identify period it is increasing in frequency
+ggplot(delta_data, aes(x = collection_date, y = lineage_proportion)) +
+  geom_line(color = "orange", linewidth = 1) +  
+  geom_point(size = 2, alpha = 0.7, color = "orange") +
+  labs(
+    title = "Daily Frequency Trajectories of B.1.617.2 (Delta)",
+    x = "Collection Date",
+    y = "Proportion"
+  ) +
+  theme_minimal()
+```
+
+Delta increases in frequency and reaches fixation between 10th April 2021 and 17th July 2021. These dates can now be applied to the function which fits the logistic growth model to measure the selective advantage (s).
+
+```{r}
+# Fit logistic growth function between the identified dates
+delta_results <- fit_logistic_growth(delta_data, "2021-04-10", "2021-07-17", "Delta")
+```
+
+#### Applying functions to BA.1
+
+The time interval in which the variant is increasing in frequency until it reaches fixation must be identified.
+
+```{r}
+# Subset lineage data for BA.1
+BA1_data <- subset(lineage_summary_weekly_data, major_lineage == "BA.1")
+
+# Plot daily BA.1 frequencies over time to identify period it is increasing in frequency
+ggplot(BA1_data, aes(x = collection_date, y = lineage_proportion)) +
+  geom_line(color = "orange", linewidth = 1) +  # Static color assigned outside aes()
+  geom_point(size = 2, alpha = 0.7, color = "orange") +  # Static color for points
+  labs(
+    title = "Daily Frequency Trajectories of BA.1",
+    x = "Collection Date",
+    y = "Proportion"
+  ) +
+  theme_minimal()
+```
+
+BA.1 increases in frequency and reaches fixation between 1st December 2021 and 22nd January 2022. These dates can now be applied to the function which fits the logistic growth model to measure the selective advantage (s).
+
+```{r}
+# Fit logistic growth model between identified dates
+BA1_results <- fit_logistic_growth(BA1_data, "2021-12-01", "2022-01-22", "BA.1")
+```
+
+#### Applying functions to BA.2
+
+The time interval in which the variant is increasing in frequency until it reaches fixation must be identified.
+
+```{r}
+# subset data for BA.2
+BA2_data <- subset(lineage_summary_weekly_data, major_lineage == "BA.2")
+
+# Plot daily BA.2 frequencies over time to identify period it is increasing in frequency
+ggplot(BA2_data, aes(x = collection_date, y = lineage_proportion)) +
+  geom_line(color = "orange", linewidth = 1) +  # Static color assigned outside aes()
+  geom_point(size = 2, alpha = 0.7, color = "orange") +  # Static color for points
+  labs(
+    title = "Daily Frequency Trajectories of BA.2",
+    x = "Collection Date",
+    y = "Proportion"
+  ) +
+  theme_minimal()
+```
+
+BA.2 increases in frequency and reaches fixation between 1st December 2021 and 22nd January 2022. These dates can now be applied to the function which fits the logistic growth model to measure the selective advantage (s).
+
+```{r}
+# Fit logistic growth model between identified dates
+BA2_results <- fit_logistic_growth(BA2_data, "2021-12-25", "2022-03-19", "BA.2")
+```
+
+Summary of selective advantages (s);
+
+Delta = 0.1267, BA.1 = 0.2593, BA.2 = 0.1048
+
+Based on the logistic growth models, BA.1 has the highest selective growth advantage for the time the variant increases until it reaches fixation.
+
+## Question 4 - regional Delta frequencies
+
+Load the COG-UK dataset which contains the sample collection date, time, region (North West, North East, Yorkshire and Humber, East of England, East Midlands, West Midlands, London, South West, South East) and whether the sample is Delta or not (True or False).
+
+```{r}
+delta_d2 <- readRDS("delta-d2.rds")
+
+# Rename columns
+colnames(delta_d2) <- c("region", "collection_date", "time", "Delta")
+
+# Convert to date format
+delta_d2$collection_date <- as.Date(delta_d2$collection_date)
+
+# Fitler out rows where region column is empty
+delta_d2 <- subset(delta_d2, region != "")
+
+# Generate major linage column in which Delta is the only major lineage
+delta_d2 <- delta_d2 %>% 
+  mutate(major_lineage = ifelse(Delta == TRUE, "Delta", "Other"))
+```
+
+#### Function to calculate regional Delta frequencies
+
+```{r}
+#' Function to calculate regional Delta frequencies
+#' 
+#' @param region_name region name from dataset in string format
+#' @param data regional delta frequencies
+
+regional_frequency <- function(region_name, data) {
+  
+  # Filter dataset for specified region
+  data %>%
+    filter(region == region_name) %>%
+    
+    # Group by collection date
+    group_by(collection_date) %>%
+    
+    # Calculate major lineage numbers for each date
+    summarise(
+      delta_count = sum(major_lineage == "Delta"),
+      other_count = sum(major_lineage == "Other")
+    ) %>%
+    
+    # Calculate total case counts and delta_proportions for each date
+    mutate(
+      total_count = delta_count + other_count,
+      delta_proportion = delta_count / total_count,
+      region = region_name
+    ) %>% 
+    ungroup()
+}
+```
+
+Regional delta frequencies can now be calculated and stored for each region of England:
+
+```{r}
+northwest_data <- regional_frequency("North West", delta_d2)
+northeast_data <- regional_frequency("North East", delta_d2)
+yorkshire_data <-  regional_frequency("Yorkshire and Humber", delta_d2)
+east_england_data <- regional_frequency("East of England", delta_d2)
+east_midlands_data <- regional_frequency("East Midlands", delta_d2)
+west_midlands_data <- regional_frequency("West Midlands", delta_d2)
+london_data <- regional_frequency("London", delta_d2)
+southwest_data <- regional_frequency("South West", delta_d2)
+southeast_data <- regional_frequency("South East", delta_d2)
+```
+
+#### Function to fit logistic growth model
+
+```{r}
+#' Function to fit logistic growth model to lineage frequency data for a specific region of England and then generate a graph which plots frequency data and fitted logistic growth model
+#' 
+#' @param data lineage frequency data
+#' @param start_date starting collection date for the model to be applied to in "Date" format
+#' @param end_date ending collection date for the model to be applied to in "Date" format
+#' @param region_name region of England as a string
+#' 
+#' @return returns fitted model and growth rate which is shown on a line graph
+
+logistic_region <- function(data, start_date, end_date, region_name) {
+  
+  # Subset data for the specified date range
+  growth_phase <- data %>%
+    filter(collection_date >= as.Date(start_date) & collection_date <= as.Date(end_date))
+  
+  # Fit the logistic growth model using non-linear least squares (nls)
+  # This fits the model by minimising sum of squared residuals
+  # Requires an initial guess of s and f0
+  # s - 0.1
+  # f0 - minimum lineage proportion within range of dates
+  nls_fit <- nls(
+    delta_proportion ~ logistic_growth(as.numeric(collection_date - min(collection_date)), s, f0),
+    data = growth_phase,
+    start = list(s = 0.1, f0 = min(growth_phase$delta_proportion))
+  )
+  
+  # Extract the growth rate value from the fitted model
+  growth_rate <- coef(nls_fit)["s"]
+  
+  # Generate smooth sequence of dates for plotting
+  smooth_dates <- seq(min(growth_phase$collection_date),
+                      max(growth_phase$collection_date), by = "1 day")
+  
+  # Calculate predicted frequencies
+  smooth_predictions <- data.frame(
+    collection_date = smooth_dates,
+    predicted_frequency = logistic_growth(as.numeric(smooth_dates - min(growth_phase$collection_date)),
+                                          coef(nls_fit)["s"], coef(nls_fit)["f0"])
+  )
+  
+  # Plot the actual data and the fitted logistic growth curve
+  plot <- ggplot(growth_phase, aes(x = collection_date)) +
+    
+    # Black line is the actual proportions
+    geom_line(aes(y = delta_proportion), color = "black", size = 1, alpha = 0.7) +
+    
+    # Orange line is the fitted logistic growth model
+    geom_line(data = smooth_predictions, aes(x = collection_date, y = predicted_frequency), 
+              color = "orange", size = 1) +
+    
+    # Annotate graph with selective advantage
+    annotate(
+      "text", 
+      x = min(growth_phase$collection_date) + (max(growth_phase$collection_date) - min(growth_phase$collection_date)) / 2, 
+      y = 0.4, 
+      label = paste0("s = ", round(growth_rate, 4)), 
+      color = "orange", 
+      size = 5
+    ) +
+    
+    # Add title and axis lables
+    labs(
+      title = paste("Logistic Growth Fit for Delta Frequency in ", region_name),
+      x = "Collection Date",
+      y = "Frequency"
+    ) +
+    theme_minimal()
+  
+  # Print the plot
+  print(plot)
+  
+  # Return the fitted model and growth rate
+  return(list(model = nls_fit, growth_rate = growth_rate))
+}
+```
+
+#### Fit logistic growth for each region
+
+North West:
+
+```{r}
+northwest_logistic <- logistic_region(northwest_data, "2021-04-12", "2021-07-01", "North West")
+```
+
+North East:
+
+```{r}
+northeast_logistic <- logistic_region(northeast_data, "2021-04-25", "2021-07-01", "North East")
+```
+
+Yorkshire and Humber:
+
+```{r}
+yorkshire_logistic <- logistic_region(yorkshire_data, "2021-05-02", "2021-07-01", "Yorkshire and Humber")
+```
+
+East of England:
+
+```{r}
+east_england_logistic <- logistic_region(east_england_data, "2021-04-14", "2021-07-01", "East of England")
+```
+
+East Midlands:
+
+```{r}
+east_midlands_logistic <- logistic_region(east_midlands_data, "2021-04-19", "2021-07-01", "East Midlands")
+```
+
+West Midlands:
+
+```{r}
+west_midlands_logistic <- logistic_region(west_midlands_data, "2021-04-14", "2021-07-01", "West Midlands")
+```
+
+London:
+
+```{r}
+london_logistic <- logistic_region(london_data, "2021-04-11", "2021-07-01", "London")
+```
+
+South West:
+
+```{r}
+southwest_logistic <- logistic_region(southwest_data, "2021-05-10", "2021-07-01", "South West")
+```
+
+South East:
+
+```{r}
+southeast_logistic <- logistic_region(southeast_data, "2021-04-13", "2021-07-01", "South East")
+```
+
+#### Analysis
+
+Summary:
+
+| Region               | s      | f0          |
+|----------------------|--------|-------------|
+| North West           | 0.1290 | 0.004566210 |
+| North East           | 0.1315 | 0.01234568  |
+| Yorkshire and Humber | 0.1528 | 0.002890173 |
+| East of England      | 0.1089 | 0.02702703  |
+| East Midlands        | 0.1057 | 0.01574803  |
+| West Midlands        | 0.1633 | 0.007352941 |
+| London               | 0.0884 | 0.009090909 |
+| South West           | 0.1213 | 0.03571429  |
+| South East           | 0.1173 | 0.01515152  |
+
+The region with the fastest growing Delta outbreak is the West Midlands as it has the highest selective advantage (0.1633) during the growth phase. This indicates that the Delta outbreak is growing fastest in this region compared to other circulating variants due to intrinsic properties of the variant and properties of the local population (e.g. immunity). The region with the earliest rise in frequencies is the South West, f0 = 0.0357. However, these values are not likely to be reliable as they are based on very small variant count values, likely due to limited sequencing coverage of the population especially in asymptomatic individuals. Furthermore, the nls model is intrinsically flawed as it cannot work with case counts of zero, which are frequent in these early outbreaks, again due to limited sequencing coverage. This also influences the start date of many of the models, as the start date must be later than the last zero value of the outbreak. This could introduce a source of bias if different regions have different sequencing coverage.
+
+Whether regional differences can be explained by a founder effect is unclear. A founder effect is when a strain has increased prevalence simply by being introduced to a region before any others, even if the strain is less fit. If there was a clear influence of a founder effect, it would be expected that there was a limited correlation between s and f0, as it would suggest that earlier presence rather than increases strain fitness infuences variant spread. This does seem to be the case, however, is not likely to be reliable due to the extremely small number of delta cases reported early on in the outbreak. To properly answer this question a statistical analysis would be required.
+
+## Question 5 - estimating true incidence and Rt of Delta
+
+#### True incidence
+
+Import the daily (7-day averaged) COVID-19 case counts from the Sanger dataset. Generate true incidence of Delta by multiplying daily total COVID-19 case count with the weekly frequencies of Delta sequences.
+
+```{r}
+# Load the daily case dta
+daily_cases <- read.csv("daily-new-confirmed-covid-19-cases.csv")
+
+# Create dataframe for weekly lineage proportion data
+# Add a week start column that rounds date to start of week
+delta_weeks <- delta_data %>%
+  mutate(week_start = floor_date(collection_date, "week")) %>%
+  dplyr::select(week_start, major_lineage, lineage_proportion) # There was a package conflict here
+
+# Add week start column to the daily case dataframe too
+daily_cases <- daily_cases %>%
+  mutate(date = as.Date(date),
+         week_start = floor_date(date, "week"))
+
+# Merge the daily case data with the weekly lineage proportion data
+# They both have a week start column which they can be merged by
+combined_data <- daily_cases %>%
+  left_join(delta_weeks, by = "week_start") %>% 
+  drop_na() %>% 
+  # Add a column for delta cases by multiplying total cases by delta proportion
+  mutate(delta_cases = cases_sevendayaveraged * lineage_proportion)
+
+# Add identifier column so datasets can be differentiated in graph
+combined_data <- combined_data %>%
+  mutate(dataset = "Delta incidence")
+
+delta_data <- delta_data %>%
+  mutate(dataset = "Delta sequencing")
+
+# Plot estimated delta incidence and delta sequence data
+ggplot() +
+  geom_line(data = combined_data, aes(x = date, y = delta_cases, color = dataset), linewidth = 1) +  
+  geom_line(data = delta_data, aes(x = collection_date, y = lineage_count, color = dataset), linewidth = 0.5) + 
+  labs(
+    title = "Delta incidence vs Delta sequencing counts",
+    x = "Date",
+    y = "Delta cases or sequence counts"
+  ) +
+  scale_color_manual(values = c("Delta incidence" = "orange", "Delta sequencing" = "black"))
+
+```
+
+These two counts are very different from each other as they are based on sequencing data vs estimations of true incidence. Sequencing data has limited coverage so is usually much lower than true incidence, possibly due to asymptomatic cases and limited testing capacity. However, later in the peak the sequence data seems to cover the majority of the estimated cases. This could be due to high testing capacity, but is more likely to be due to a flaw in the model like asymptomatic cases or poor incidence estimation. Furthermore, the incidence data is daily whereas the Sanger sequencing data is aggregated weekly. This can lead to differences in fluctuations as the weekly data is smoothened. I would also expect to see a lag from the sequencing data as it takes time for samples to be sequenced and reported, but this does not seem to be the case.
+
+#### Measuring Rt
+
+Rt is estimated using the EpiEstim package and requires parameters like incidence data and serial interval for the strain. Incidence data is taken from the true incidence dataset calculated previously and the mean serial interval (4.1 days) and standard deviation of the serial interval (2.8 days) is taken from Backer et al, 2021.
+
+```{r warning=FALSE, message=FALSE}
+library(MCMCpack)
+library(EpiEstim) # Used to estimate Rt
+library(incidence) # 
+
+# Specify start and end dates
+# The input incidence data for EpiEstim cannot include missing dates and case counts 
+start_date <- as.Date("2021-06-01")
+end_date <- as.Date("2021-11-01")
+
+# Filter data so it only includes cases within date range
+filtered_delta_counts <- subset(
+  combined_data,
+  date >= start_date & date <= end_date
+)
+
+# Prepare incidence data fro the EpiEstim package estimate_R function
+incidence_data <- data.frame(
+  dates = filtered_delta_counts$date,
+  I = filtered_delta_counts$delta_cases  # Use lineage_count as daily incidence
+)
+
+# Define serial interval parameters (example values)
+serial_interval <- list(mean_si = 4.1, std_si = 2.8)
+
+# Estimate R_t using EpiEstim
+rt_results <- estimate_R(
+  incid = incidence_data,
+  method = "parametric_si", 
+  config = make_config(serial_interval) 
+)
+
+# Plot the R_t estimates over time
+plot(rt_results, what = "R", ci = TRUE, legend = FALSE) +
+  labs(
+    title = expression("Time-varying reproduction number" ~ (R[t]) ~ "for Delta"),
+    x = "Date",
+    y = expression("Reproduction number" ~ (R[t]))
+  )
+```
+
+In the early phase of the delta outbreak Rt is approximately 1.9, which is very similar to the value of 1.85 obtained from the ONS-CIS analysis from the practical. I would therefore consider both datasets, COG-UK and ONS, to produce accurate Rt values, though both datasets have their advantages and disadvantages. COG-UK genomic data was gathered from the residues of PCR tests given to **symptomatic individuals** during the pandemic. This differs from the ONS-CIS data which was collected from a random sample of UK residential households, meaning that both symptomatic and asymptomic infections were sampled. The COG-UK has a much larger sample size and picks up infections from non-residential settings like hospitals but misses asymptomatic cases. The ONS-CIS dataset is smaller but picks up asymptomatic cases and is more representative of the entire UK as it accounts for differences in testing capability throughout the country. To make a clear judgement about which method is better, I would need information about the prevalence of asymptomatic infections.
+
+## References
+
+Backer Jantien A, Eggink Dirk, Andeweg Stijn P, Veldhuijzen Irene K, van Maarseveen Noortje, Vermaas Klaas, Vlaemynck Boris, Schepers Raf, van den Hof Susan, Reusken Chantal BEM, Wallinga Jacco. Shorter serial intervals in SARS-CoV-2 cases with Omicron BA.1 variant compared with Delta variant, the Netherlands, 13 to 26 December 2021. Euro Surveill. 2022;27(6):pii=2200042. <https://doi.org/10.2807/1560-7917.ES.2022.27.6.2200042>
